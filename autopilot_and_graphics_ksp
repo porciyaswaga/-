@@ -1,0 +1,116 @@
+import krpc
+import time
+import matplotlib.pyplot as plt
+
+conn = krpc.connect(name='P-1B Mission (Desik and Tsygan)')
+vessel = conn.space_center.active_vessel
+body = vessel.orbit.body
+surface_reference_frame = vessel.orbit.body.reference_frame
+
+vessel.auto_pilot.engage()
+vessel.auto_pilot.target_pitch_and_heading(90, 90)
+vessel.auto_pilot.target_roll = 0
+vessel.auto_pilot.stopping_time = (0.1, 0.1, 0.1)
+
+vessel.control.throttle = 1.0
+
+print("Запуск!")
+vessel.control.activate_next_stage()
+time.sleep(1)
+
+altitude_stream = conn.add_stream(getattr, vessel.flight(), 'surface_altitude')
+mass_stream = conn.add_stream(getattr, vessel, 'mass')
+vertical_speed_stream = conn.add_stream(getattr, vessel.flight(surface_reference_frame), 'vertical_speed')
+
+times = []
+masses = []
+vertical_speeds = []
+altitudes = []
+
+start_time = time.time()
+
+def collect_data(mass=None):
+    current_time = time.time() - start_time
+    vertical_speed = abs(vertical_speed_stream())  
+    altitude = altitude_stream()
+    if mass is None:
+        mass = mass_stream()
+    times.append(current_time)
+    masses.append(mass)
+    vertical_speeds.append(vertical_speed)
+    altitudes.append(altitude)
+    print(f"Время: {current_time:.2f} с, Масса: {mass:.2f} кг, Вертикальная скорость: {vertical_speed:.2f} м/с, Высота: {altitude:.2f} м")
+
+while altitude_stream() < 87000:
+    collect_data()
+    time.sleep(0.1)
+
+print("Достигнута высота 87 км, отключаем двигатель.")
+vessel.control.throttle = 0
+time.sleep(1)
+collect_data()
+
+print("Отделяем кабину.")
+vessel.control.activate_next_stage()
+time.sleep(5)
+
+detachment_time = time.time() - start_time
+vessel = conn.space_center.active_vessel
+
+cabin_mass = 810
+collect_data(mass=cabin_mass)
+
+vessel.auto_pilot.engage()
+vessel.auto_pilot.target_pitch_and_heading(90, 90)  
+vessel.auto_pilot.target_roll = 0  
+
+print("Подъем продолжается до апогея...")
+while altitude_stream() < 100000:
+    collect_data(mass=cabin_mass)
+    time.sleep(0.1)
+
+print("Апогей достигнут. Начинается снижение.")
+
+while altitude_stream() > 5000:
+    collect_data(mass=cabin_mass)
+    time.sleep(0.1)
+
+print("Раскрытие парашюта.")
+vessel.control.activate_next_stage()
+collect_data(mass=cabin_mass)
+
+print("Ожидание приземления...")
+while not vessel.situation == conn.space_center.VesselSituation.landed:
+    time.sleep(1)
+
+plt.figure(figsize=(15, 10))
+
+plt.subplot(3, 1, 1)
+plt.plot(times, masses, label='Масса', color='blue')
+plt.axvline(x=detachment_time, color='green', linestyle='--', label='Момент отделения кабины')
+plt.xlabel('Время (с)')
+plt.ylabel('Масса (кг)')
+plt.title('График зависимости массы от времени')
+plt.grid(True)
+plt.legend()
+
+plt.subplot(3, 1, 2)
+plt.plot(times, vertical_speeds, label='Вертикальная скорость', color='red')
+plt.axhline(y=0, color='black', linestyle='--', label='Нулевая скорость')
+plt.xlabel('Время (с)')
+plt.ylabel('Вертикальная скорость (м/с)')
+plt.title('График зависимости вертикальной скорости от времени')
+plt.grid(True)
+plt.legend()
+
+plt.subplot(3, 1, 3)
+plt.plot(times, altitudes, label='Высота', color='purple')
+plt.axvline(x=detachment_time, color='green', linestyle='--', label='Момент отделения кабины')
+plt.xlabel('Время (с)')
+plt.ylabel('Высота (м)')
+plt.title('График зависимости высоты от времени')
+plt.grid(True)
+plt.legend()
+
+plt.tight_layout()
+plt.show()
